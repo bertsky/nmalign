@@ -1,0 +1,4 @@
+rapidfuzz
+numpy
+click
+ocrd

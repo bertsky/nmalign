@@ -1,0 +1,14 @@
+{
+    "git_url": "https://github.com/bertsky/nmalign",
+    "version": "0.0.1",
+    "tools": {
+        "ocrd-nmalign-merge": {
+            "executable": "ocrd-nmalign-merge",
+            "categories": ["Text recognition and optimization"],
+            "steps": ["recognition/post-correction"],
+            "description": "forced alignment of lists of string by fuzzy string matching",
+            "parameters": {
+            }
+        }
+    }
+}
