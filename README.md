@@ -85,6 +85,7 @@ Other options:
 For example:
 
 <details><summary>file input, index output</summary>
+<p>
 
 ```
 nmalign --files1 GT.SELECTED/FILE_0094_*.gt.txt --files2 GT/FILE_0094_*.gt.txt
@@ -133,8 +134,10 @@ nmalign --files1 GT.SELECTED/FILE_0094_*.gt.txt --files2 GT/FILE_0094_*.gt.txt
 42    40    90.0
 ```
 
+</p>
 </details>
 <details><summary>file input, string output</summary>
+<p>
 
 ```
 zo ſo wbohim wotpalenym we jich nuzy a pſchi natwarjenju ze wſchěch ſtro⸗	zo ſo wbohim wotpalenym we jih nuzy a pihi natwarjenju ze wſchech ftro-	91.78082
@@ -180,8 +183,10 @@ Na kóncu lěta 1867 płacźeſche kórc pſcheńcy 7 tol. 7½ nſl.; rožki 3 t
 1868: kórc pſcheńcy 6 tol.; rožki 4 tol. 22½ nfl.; jecžmjenja 4 tol.;	1868: köre pſcheücy 6 tol.; rozki 4 tol. 22 ½ nſl.; jeczmjenja 4 tol.;	90.0
 ```
 
+</p>
 </details>
 <details><summary>file input, filename output</summary>
+<p>
 
 ```
 nmalign -f --files1 GT.SELECTED/FILE_0094_*.gt.txt --files2 GT/FILE_0094_*.gt.txt
@@ -231,6 +236,7 @@ GT.SELECTED/FILE_0094_GT.SELECTED_region0012_region0012_line0010.gt.txt	GT/FILE_
 GT.SELECTED/FILE_0094_GT.SELECTED_region0012_region0012_line0011.gt.txt	GT/FILE_0094_GT_FILE_0094_CROPPED_region0003_FILE_0094_CROPPED_region0003_line0013.gt.txt	90.14085
 ```
 
+</p>
 </details>
 
 ### [OCR-D processor](https://ocr-d.de/en/spec/cli) interface `ocrd-nmalign-merge`
@@ -300,12 +306,14 @@ Options:
 For example:
 
 <details><summary>file input, index output</summary>
+<p>
 
 ```
 ocrd-nmalign-merge -I OCR-D-OCR,OCR-D-GT-SEG-BLOCK -O OCR-D-GT-SEG-LINE
 ```
 
-</details
+</p>
+</details>
 
 ## Open Tasks
 
