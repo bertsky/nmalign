@@ -1,4 +1,5 @@
 import os
+import re
 import json
 from itertools import chain
 from pkg_resources import resource_string
@@ -14,6 +15,7 @@ from ocrd_utils import (
 )
 from ocrd_modelfactory import page_from_file
 from ocrd_models.ocrd_page import (
+    TextLineType,
     TextEquivType,
     RegionRefType,
     RegionRefIndexedType,
@@ -77,7 +79,9 @@ class NMAlignMerge(Processor):
         assert_file_grp_cardinality(self.output_file_grp, 1)
 
         input_file_grp, other_file_grp = self.input_file_grp.split(",")
-        ifts = self.zip_input_files(mimetype=MIMETYPE_PAGE) # input file tuples
+        # we actually want input with MIMETYPE_PAGE for the first grp
+        # and PAGE or (any number of) text/plain files for the second grp
+        ifts = self.zip_input_files(mimetype="//(%s|text/plain)" % re.escape(MIMETYPE_PAGE)) # input file tuples
         for n, ift in enumerate(ifts):
             input_file, other_file = ift
             file_id = make_file_id(input_file, self.output_file_grp)
@@ -93,14 +97,22 @@ class NMAlignMerge(Processor):
                 LOG.warning("no text lines on page %s of 1st input", page_id)
                 continue
             texts = list(map(page_element_unicode0, lines))
-            other_pcgts = page_from_file(self.workspace.download_file(other_file))
-            other_page = other_pcgts.get_Page()
-            other_lines = other_page.get_AllTextLines()
-            other_texts = list(map(page_element_unicode0, other_lines))
-            if not len(other_texts):
-                # no textline level in 2nd input: try region level with newlines
-                other_texts = list(chain.from_iterable(
-                    [text.split('\r\n') for text in region.get_TextEquiv()[0].Unicode]))
+            other_file = self.workspace.download_file(other_file)
+            if other_file.mimetype == MIMETYPE_PAGE:
+                other_pcgts = page_from_file(other_file)
+                other_page = other_pcgts.get_Page()
+                other_lines = other_page.get_AllTextLines()
+                other_texts = list(map(page_element_unicode0, other_lines))
+                if not len(other_texts):
+                    # no textline level in 2nd input: try region level with newlines
+                    other_texts = list(chain.from_iterable(
+                        [text.split('\r\n') for text in region.get_TextEquiv()[0].Unicode
+                         for region in other_page.get_AllRegions(classes=['Text'],)]))
+            else:
+                other_texts = open(other_file.local_filename, 'r').read().splitlines()
+                other_lines = [TextLineType(id="line%04d"%i,
+                                            TextEquiv=[TextEquivType(Unicode=line)])
+                               for i, line in enumerate(other_texts)]
             if not len(other_texts):
                 LOG.error("no text lines on page %s of 2nd input", page_id)
                 continue

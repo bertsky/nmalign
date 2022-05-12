@@ -67,6 +67,8 @@ def cli(processes, show_strings, show_files, separator,
             a = list1[ind1]
             b = list2[ind2]
         elif show_files:
+            if ind2 < 0:
+                continue
             a = files1[ind1]
             b = files2[ind2]
         else:
