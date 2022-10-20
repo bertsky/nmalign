@@ -1,4 +1,5 @@
-rapidfuzz
+rapidfuzz>=2.0
 numpy
 click
+cloup
 ocrd
