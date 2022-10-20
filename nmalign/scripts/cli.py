@@ -4,7 +4,9 @@ import cloup
 from . import OptionEatAll
 from ..lib import align
 
-@cloup.command()
+CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help'])
+
+@cloup.command(context_settings=CONTEXT_SETTINGS)
 @cloup.option('-j', '--processes', default=1, help='number of processes to run in parallel', type=cloup.IntRange(min=1, max=32))
 @cloup.option('-s', '--show-strings', is_flag=True, help='print strings themselves instead of indices')
 @cloup.option('-f', '--show-files', is_flag=True, help='print file names themselves instead of indices')
