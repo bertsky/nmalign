@@ -59,18 +59,27 @@ class NMAlignMerge(Processor):
         Align character sequences in all pairs of lines for any
         combination of textlines from either side.
 
-        Then iteratively search the next closest match pair. Remember
-        the assigned result as injective mapping from first to second
-        fileGrp.
+        If ``normalization`` is non-empty, then apply each of these regex
+        replacements to both sides before comparison.
 
-        When all lines of the first fileGrp have been assigned,
+        Then iteratively search the next closest match pair. Remember
+        the assigned result as mapping from first to second fileGrp.
+
+        When all lines of the second fileGrp have been assigned,
         or the ``cutoff_dist`` has been reached, apply the mapping
         by inserting each line from the second fileGrp into position
         0 (and `@index=0`) at the first fileGrp. Also mark the inserted
         TextEquiv via `@dataType=other` and `@dataTypeDetails=GRP`.
 
         (Unmatched or cut off lines will stay unchanged, except for
-        their `@index=1` asf.)
+        their `@index` now starting at 1.)
+
+        If ``allow_splits`` is true, then for each long bad match, spend
+        some extra time searching for subsegmentation candidates, i.e.
+        a sequence of multiple lines from the first fileGrp aligning
+        with a single line from the second fileGrp. When such a sequence
+        outscores the bad match, prefer the concatenated sequence over
+        the single match when inserting results.
 
         Produce a new PAGE output file by serialising the resulting hierarchy.
         """
@@ -79,14 +88,19 @@ class NMAlignMerge(Processor):
         assert_file_grp_cardinality(self.output_file_grp, 1)
 
         input_file_grp, other_file_grp = self.input_file_grp.split(",")
+        # input file tuples:
         # we actually want input with MIMETYPE_PAGE for the first grp
         # and PAGE or (any number of) text/plain files for the second grp
-        ifts = self.zip_input_files(mimetype="//(%s|text/plain)" % re.escape(MIMETYPE_PAGE)) # input file tuples
+        ifts = self.zip_input_files(mimetype="//(%s|text/plain)" % re.escape(MIMETYPE_PAGE),
+                                    on_error='abort')
+        all_confs = []
+        all_match = 0
+        all_total = 0
         for n, ift in enumerate(ifts):
             input_file, other_file = ift
             file_id = make_file_id(input_file, self.output_file_grp)
             page_id = input_file.pageId or input_file.ID
-            LOG.info("INPUT FILE %i / %s", n, page_id)
+            LOG.info("INPUT FILE %i / %s (%s vs %s)", n, input_file.pageId, input_file.ID, other_file.ID)
             pcgts = page_from_file(self.workspace.download_file(input_file))
             pcgts.set_pcGtsId(file_id)
             self.add_metadata(pcgts)
@@ -102,12 +116,16 @@ class NMAlignMerge(Processor):
                 other_pcgts = page_from_file(other_file)
                 other_page = other_pcgts.get_Page()
                 other_lines = other_page.get_AllTextLines()
-                other_texts = list(map(page_element_unicode0, other_lines))
-                if not len(other_texts):
+                if len(other_lines):
+                    other_texts = list(map(page_element_unicode0, other_lines))
+                else:
                     # no textline level in 2nd input: try region level with newlines
-                    other_texts = list(chain.from_iterable(
-                        [text.split('\r\n') for text in region.get_TextEquiv()[0].Unicode
-                         for region in other_page.get_AllRegions(classes=['Text'],)]))
+                    LOG.warning("no text lines on page %s for 2nd input, trying newline-separeted text regions", page_id)
+                    # keep whole regions to be subsegmented,
+                    # or split lines, or full page?
+                    other_texts = list(chain.from_iterable([
+                        page_element_unicode0(region).split('\r\n')
+                        for region in other_page.get_AllRegions(classes=['Text'])]))
             else:
                 other_texts = open(other_file.local_filename, 'r').read().splitlines()
                 other_lines = [TextLineType(id="line%04d"%i,
@@ -117,23 +135,54 @@ class NMAlignMerge(Processor):
                 LOG.error("no text lines on page %s of 2nd input", page_id)
                 continue
             # calculate assignments and scores
-            res, dst = align.match(texts, other_texts, workers=1)
-            for other_ind in set(range(len(other_texts))).difference(res):
+            res, dst = align.match(texts, other_texts, workers=1,
+                                   normalization=self.parameter['normalization'],
+                                   try_subseg=self.parameter['allow_splits'])
+            if self.parameter['allow_splits']:
+                res_ind, res_beg, res_end = res
+            else:
+                res_ind = res
+            for other_ind in set(range(len(other_texts))).difference(res_ind):
                 LOG.warning("no match for %s on page %s", other_lines[other_ind].id, page_id)
-            for ind, other_ind in enumerate(res):
+            page_confs = []
+            page_match = 0
+            page_total = 0
+            for ind, other_ind in enumerate(res_ind):
                 line = lines[ind]
                 for n, textequiv in enumerate(line.TextEquiv or [], 1):
-                    textequiv.index = n
+                    textequiv.index = n # increment @index of existing TextEquivs
+                if len(other_lines):
+                    other_line = other_lines[other_ind]
+                else:
+                    # no textline level in 2nd input, only region level newline-split:
+                    # create pseudo-line
+                    other_text = other_texts[other_ind]
+                    other_line = TextLineType(id="line%04d" % other_ind,
+                                              TextEquiv=[TextEquivType(Unicode=other_text)])
+                page_total += 1
                 if other_ind < 0:
                     LOG.warning("unmatched line %s on page %s", line.id, page_id)
-                else:
-                    other_line = other_lines[other_ind]
-                    LOG.debug("matching line %s vs %s [%d%%]", line.id, other_line.id, dst[ind])
-                    textequiv = other_line.TextEquiv[0]
-                    textequiv.index = 0
-                    textequiv.dataType = 'other'
-                    textequiv.dataTypeDetails = other_file_grp + '/' + other_line.id
-                    line.insert_TextEquiv_at(0, textequiv)
+                    continue
+                page_match += 1
+                textequiv = TextEquivType()
+                textequiv.index = 0
+                textequiv.conf = dst[ind]
+                textequiv.Unicode = page_element_unicode0(other_line)
+                if self.parameter['allow_splits'] and res_beg[ind] >= 0 and res_end[ind] >= 0:
+                    other_line.id += "[%d:%d]" % (res_beg[ind], res_end[ind])
+                    textequiv.Unicode = textequiv.Unicode[res_beg[ind]:res_end[ind]]
+                textequiv.dataType = 'other'
+                textequiv.dataTypeDetails = other_file_grp + '/' + other_line.id
+                LOG.debug("matching line %s vs %s [%d%%]", line.id, other_line.id, 100 * dst[ind])
+                line.insert_TextEquiv_at(0, textequiv) # update
+                page_confs.append(dst[ind])
+            if len(page_confs):
+                LOG.info("average alignment accuracy for page %s: %d%%", page_id, 100 * sum(page_confs) / len(page_confs))
+            if page_total:
+                LOG.info("coverage of matching lines for page %s: %d%%", page_id, 100 * page_match / page_total)
+            all_confs.extend(page_confs)
+            all_match += page_match
+            all_total += page_total
 
             page_update_higher_textequiv_levels('line', pcgts)
             self.workspace.add_file(
@@ -144,6 +193,10 @@ class NMAlignMerge(Processor):
                 local_filename=os.path.join(self.output_file_grp,
                                             file_id + '.xml'),
                 content=to_xml(pcgts))
+        if len(all_confs):
+            LOG.info("average alignment accuracy overall: %d%%", 100 * sum(all_confs) / len(all_confs))
+        if all_total:
+            LOG.info("coverage of matching lines overall: %d%%", 100 * all_match / all_total)
 
 # from ocrd_tesserocr
 def page_element_unicode0(element):

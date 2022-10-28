@@ -18,9 +18,10 @@ This offers **forced alignment** of textlines by fuzzy string matching.
 
 It combines all pairs of strings (i.e. text lines) from either side,
 calculates their edit distance (assuming some of them are very similar),
-and assigns an injective mapping from one side to the other by iteratively
+and assigns a mapping from one side to the other by iteratively
 selecting those pairs which have the next-smallest distance (and taking
-them out of the search).
+them out of the search). The mapping is not necessarily injective or surjective
+(because segments may be split or not match at all).
 
 This can be used in OCR settings to align lines when you have different
 segmentation. For example, often ground truth data is only transcribed on

@@ -1,5 +1,6 @@
 import click
 import cloup
+import json
 
 from . import OptionEatAll
 from ..lib import align
@@ -8,6 +9,8 @@ CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help'])
 
 @cloup.command(context_settings=CONTEXT_SETTINGS)
 @cloup.option('-j', '--processes', default=1, help='number of processes to run in parallel', type=cloup.IntRange(min=1, max=32))
+@cloup.option('-N', '--normalization', default=None, help='JSON object with regex patterns and replacements to be applied before comparison')
+@cloup.option('-x', '--allow-splits', is_flag=True, help='find multiple submatches if replacement scores low')
 @cloup.option('-s', '--show-strings', is_flag=True, help='print strings themselves instead of indices')
 @cloup.option('-f', '--show-files', is_flag=True, help='print file names themselves instead of indices')
 @cloup.constraint(cloup.constraints.mutually_exclusive, ['show_strings', 'show_files'])
@@ -33,17 +36,17 @@ CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help'])
     cloup.constraints.If('show_files',
                          then=cloup.constraints.require_one),
     ['files2', 'filelist2'])
-def cli(processes, show_strings, show_files, separator,
+def cli(processes, normalization, allow_splits, show_strings, show_files, separator,
         strings1, files1, filelist1,
         strings2, files2, filelist2):
     """Force-align two lists of strings.
 
     Computes string alignments between each pair among l1 and l2.
     Then iteratively searches the next closest pair. Stores
-    the assigned result as injective mapping from l1 to l2.
+    the assigned result as a mapping from l1 to l2.
     (Unmatched or cut off elements will be assigned -1.)
 
-    Prints the corresponding list indices and match scores [0,100]
+    Prints the corresponding list indices and match scores [0.0,1.0]
     as CSV data.
     """
     #list1 = list(map(file_.read() for file_ in files1))
@@ -59,15 +62,25 @@ def cli(processes, show_strings, show_files, separator,
         if filelist2:
             files2 = list(map(str.strip, filelist2.readlines()))
         list2 = [open(filename, 'r').read() for filename in files2]
+    if normalization:
+        normalization = json.loads(normalization)
+    else:
+        normalization = None
     # calculate assignments and scores
-    res, dst = align.match(list1, list2, workers=processes)
-    for ind1, ind2 in enumerate(res):
+    res, dst = align.match(list1, list2, normalization=normalization, workers=processes, try_subseg=allow_splits)
+    if allow_splits:
+        res_ind, res_beg, res_end = res
+    else:
+        res_ind = res
+    for ind1, ind2 in enumerate(res_ind):
         score = str(dst[ind1])
         if show_strings:
             if ind2 < 0:
                 continue
             a = list1[ind1]
             b = list2[ind2]
+            if allow_splits and res_beg[ind1] >= 0 and res_end[ind1] >= 0:
+                b = b[res_beg[ind1]:res_end[ind1]]
         elif show_files:
             if ind2 < 0:
                 continue
@@ -76,7 +89,10 @@ def cli(processes, show_strings, show_files, separator,
         else:
             a = str(ind1)
             b = str(ind2)
-        click.echo(a + separator + b + separator + score)
+        msg = a + separator + b + separator + score
+        if allow_splits and res_beg[ind1] >= 0 and res_end[ind1] >= 0:
+            msg += separator + str(res_beg[ind1]) + separator + str(res_end[ind1])
+        click.echo(msg)
 
 if __name__ == '__main__':
     cli()

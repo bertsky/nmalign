@@ -1,5 +1,7 @@
 rapidfuzz>=2.0
 numpy
+scipy
 click
 cloup
 ocrd
+joblib

@@ -1,14 +1,27 @@
 {
-    "git_url": "https://github.com/bertsky/nmalign",
-    "version": "0.0.2",
-    "tools": {
-        "ocrd-nmalign-merge": {
-            "executable": "ocrd-nmalign-merge",
-            "categories": ["Text recognition and optimization"],
-            "steps": ["recognition/post-correction"],
-            "description": "forced alignment of lists of string by fuzzy string matching",
-            "parameters": {
-            }
+  "git_url": "https://github.com/bertsky/nmalign",
+  "version": "0.0.3",
+  "tools": {
+    "ocrd-nmalign-merge": {
+      "executable": "ocrd-nmalign-merge",
+      "categories": ["Text recognition and optimization"],
+      "steps": ["recognition/post-correction"],
+      "description": "forced alignment of lists of string by fuzzy string matching",
+      "parameters": {
+        "normalization": {
+          "type": "object",
+          "default": {},
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "replacement pairs (regex patterns and regex backrefs) to be applied prior to matching (but not on the result itself)"
+        },
+        "allow_splits": {
+          "type": "boolean",
+          "default": false,
+          "description": "allow line strings of the first input fileGrp to be matched by multiple line strings of the second input fileGrp (so concatenate all the latter before inserting into the former)"
         }
+      }
     }
+  }
 }
