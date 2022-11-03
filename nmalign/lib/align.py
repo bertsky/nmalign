@@ -30,8 +30,20 @@ def match(l1, l2, workers=1, normalization=None, cutoff=None, try_subseg=False):
     assert len(l2) > 0
     assert isinstance(l1[0], str)
     assert isinstance(l2[0], str)
-    # FIXME: normalization will allow short sequences to go before larger (equally scoring) ones, but we might prefer largest-first
-    # FIXME: some bonus for local in-order (e.g. below region)?
+    # considerations:
+    # - normalization will allow short sequences to go before larger (equally scoring) ones,
+    #   but we prefer largest-first; so prior to argmax, multiply normalized similarity
+    #   with l2 lengths
+    # - some bonus for local in-order (e.g. below region) is needed, especially for bad pairs;
+    #   so prior to argmax, add a cost as number of already aligned pairs times each candidate's
+    #   deviation from local monotonicity
+    #   (monotonicity can be formalised as block-triangular boolean matrix:
+    #    each existing pair/alignment defines the corner/intersection of two blocks,
+    #    with (0,0) and (L,L) as a priori edges; blocks represent where new (x,y) pairs
+    #    are compatible with the existing choices; in case of non-monotonicity,
+    #    i.e. when some neighbouring (x1,y1) and (x2,y2) with x1<x2 != y1<y2 exist,
+    #    there is no block between [x1,x2] _and_ [y1,y2] - so no new point in the vicinity
+    #    gets prioritised until new neighbours arrive)
     # FIXME: for maximal use (e.g. both page-wise and line-wise alignment), consider using coarser metrics than Levenshtein on larger sequences
     # FIXME: allow passing confidence input (larger OCR confidence - less permissable deviation)
     def preprocess(s):
@@ -55,23 +67,45 @@ def match(l1, l2, workers=1, normalization=None, cutoff=None, try_subseg=False):
         result_idx, result_beg, result_end = result
     else:
         result_idx = result
+    # normalized similarity favours short sequences, which are "easier" to align
+    # but we want to start with longest matches, so multiply with sequence length
     scores = np.zeros(dim1, dtype=dist.dtype)
+    length = np.tile(list(map(len, l2)), (dim1, 1))
     for _ in range(dim1):
         # make efficient view of remaining indexes
         distview = dist[np.ix_(keep1,keep2)]
         if not distview.size:
             break
-        ind1, ind2 = np.unravel_index(np.argmax(distview, axis=None), distview.shape)
+        # in addition to isolated match score, we want to prioritise new mappings that
+        # keep consistency with current mappings and local ordering on both sides, i.e.
+        # monotonicity in the neighbourhood of current mappings
+        monotonicity = np.zeros(dist.shape, dtype=np.bool)
+        prev_ind1, prev_ind2 = 0, 0
+        for ind1, ind2 in list(zip(np.flatnonzero(~keep1), result_idx[~keep1])) + [(dim1, dim2)]:
+            if (ind1 >= prev_ind1) == (ind2 >= prev_ind2):
+                monotonicity[prev_ind1:ind1, prev_ind2:ind2] = True
+            else:
+                monotonicity[prev_ind1:ind1, :] = False
+                monotonicity[:, ind2:prev_ind2] = False
+            prev_ind1, prev_ind2 = ind1, ind2
+        monotonicity = monotonicity[np.ix_(keep1, keep2)]
+        coverage = 1.0 - monotonicity.shape[0] / dim1 # sigmoid in nr of assigned idx1:
+        coverage = 0.5 / (1 + np.exp(5 * (0.5 - coverage)))
+        lengthview = length[np.ix_(keep1,keep2)]
+        # score = (similarity [0.0-1.0] + monotonicity [0,] * coverage [0.0-0.5]) * length
+        priority = (distview + coverage * monotonicity) * lengthview
+        ind1, ind2 = np.unravel_index(np.argmax(priority, axis=None), priority.shape)
+        scoresfor2 = distview[:,ind2] # for subseg below
+        indxesfor2 = idx1[keep1] # for subseg below
         score = distview[ind1,ind2]
         if isinstance(cutoff, (int, float)) and score < cutoff:
             break
-        scoresfor2 = distview[:,ind2]
-        indxesfor2 = idx1[keep1]
-        # return to full view
+        # return to full view and assign next
         ind1 = idx1[keep1][ind1]
         ind2 = idx2[keep2][ind2]
         seg1 = l1[ind1]
         seg2 = l2[ind2]
+        # assignment must be new
         assert result_idx[ind1] < 0
         assert keep1[ind1]
         assert keep2[ind2]
