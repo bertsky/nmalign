@@ -196,6 +196,6 @@ def match_subseg(l1, seg2, scoresfor2, indxesfor2, min_score=0, workers=1, proce
         subscore = subdist[subpos] - subdist[prepos]
         subind = subindxesfor2[prepos, subpos]
         if subind >= 0:
-            subresult.append((subind, prepos, subpos, 1.0 - subscore / len2))
+            subresult.append((subind, prepos, subpos, 1.0 - subscore / (subpos - prepos)))
         subpos = prepos
     return subresult
