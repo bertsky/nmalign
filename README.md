@@ -9,7 +9,7 @@
   * [Usage](#usage)
      * [standalone command-line interface nmalign](#standalone-command-line-interface-nmalign)
      * [OCR-D processor interface ocrd-nmalign-merge](#ocr-d-processor-interface-ocrd-nmalign-merge)
-  * [Open Tasks](#open-tasks)
+  * [Implementation](#implementation)
 
 ## Introduction
 
@@ -20,10 +20,12 @@ It combines all pairs of strings (i.e. text lines) from either side,
 calculates their edit distance (assuming some of them are very similar),
 and assigns a mapping from one side to the other by iteratively
 selecting those pairs which have the next-smallest distance (and taking
-them out of the search). The mapping is not necessarily injective or surjective
+them out of the search). 
+
+The mapping is not necessarily injective or surjective
 (because segments may be split or not match at all).
 
-This can be used in OCR settings to align lines when you have different
+This can be used in OCR settings to align (pages or) lines when you have different
 segmentation. For example, often ground truth data is only transcribed on
 the page level, but OCR results are available on the line level with precise
 coordinates. If GT and OCR text are close enough to each other, you could then
@@ -57,11 +59,22 @@ Usage: nmalign [OPTIONS]
 
   Force-align two lists of strings.
 
-  Computes string alignments between each pair among l1 and l2. Then iteratively
-  searches the next closest pair. Stores the assigned result as injective
-  mapping from l1 to l2. (Unmatched or cut off elements will be assigned -1.)
+  Computes string alignments between each pair among l1 and l2 (after optionally
+  normalising both sides).
 
-  Prints the corresponding list indices and match scores [0,100] as CSV data.
+  Then iteratively searches the next closest pair, while trying to maintain
+  local monotonicity.
+
+  If splits are allowed and the score is already low, then searches for more
+  matches among l1 for the pair's right side sequence: If any subset of them can
+  be combined into a path such that the sum score is better than the integral
+  score, then prefers those assignments.
+
+  Stores the assigned result as a mapping from l1 to l2. (Unmatched or cut off
+  elements will be assigned -1.)
+
+  Prints the corresponding list indices and match scores [0.0,1.0] as CSV data.
+  (For subsequences, the start and end position will be appended.)
 
 list to be replaced: [exactly 1 required]
   --strings1 TUPLE               as strings
@@ -76,6 +89,10 @@ list of replacements: [exactly 1 required]
 Other options:
   -j, --processes INTEGER RANGE  number of processes to run in parallel
                                  [1<=x<=32]
+  -N, --normalization TEXT       JSON object with regex patterns and
+                                 replacements to be applied before comparison
+  -x, --allow-splits             find multiple submatches if replacement scores
+                                 low
   -s, --show-strings             print strings themselves instead of indices
   -f, --show-files               print file names themselves instead of indices
   -S, --separator TEXT           print this string between result columns
@@ -264,17 +281,27 @@ Usage: ocrd-nmalign-merge [OPTIONS]
   > Align character sequences in all pairs of lines for any combination
   > of textlines from either side.
 
-  > Then iteratively search the next closest match pair. Remember the
-  > assigned result as injective mapping from first to second fileGrp.
+  > If ``normalization`` is non-empty, then apply each of these regex
+  > replacements to both sides before comparison.
 
-  > When all lines of the first fileGrp have been assigned, or the
+  > Then iteratively search the next closest match pair. Remember the
+  > assigned result as mapping from first to second fileGrp.
+
+  > When all lines of the second fileGrp have been assigned, or the
   > ``cutoff_dist`` has been reached, apply the mapping by inserting
   > each line from the second fileGrp into position 0 (and `@index=0`)
   > at the first fileGrp. Also mark the inserted TextEquiv via
   > `@dataType=other` and `@dataTypeDetails=GRP`.
 
   > (Unmatched or cut off lines will stay unchanged, except for their
-  > `@index=1` asf.)
+  > `@index` now starting at 1.)
+
+  > If ``allow_splits`` is true, then for each long bad match, spend
+  > some extra time searching for subsegmentation candidates, i.e. a
+  > sequence of multiple lines from the first fileGrp aligning with a
+  > single line from the second fileGrp. When such a sequence outscores
+  > the bad match, prefer the concatenated sequence over the single
+  > match when inserting results.
 
   > Produce a new PAGE output file by serialising the resulting
   > hierarchy.
@@ -285,14 +312,12 @@ Options:
   -g, --page-id ID                Physical page ID(s) to process
   --overwrite                     Remove existing output pages/images
                                   (with --page-id, remove only those)
+  --profile                       Enable profiling
+  --profile-file                  Write cProfile stats to this file. Implies --profile
   -p, --parameter JSON-PATH       Parameters, either verbatim JSON string
                                   or JSON file path
   -P, --param-override KEY VAL    Override a single JSON object key-value pair,
                                   taking precedence over --parameter
-  -s, --server HOST PORT WORKERS  Run web server instead of one-shot processing
-                                  (shifts mets/working-dir/page-id options to
-                                   HTTP request arguments); pass network interface
-                                  to bind to, TCP port, number of worker processes
   -m, --mets URL-PATH             URL or file path of METS to process
   -w, --working-dir PATH          Working directory of local workspace
   -l, --log-level [OFF|ERROR|WARN|INFO|DEBUG|TRACE]
@@ -300,8 +325,18 @@ Options:
   -C, --show-resource RESNAME     Dump the content of processor resource RESNAME
   -L, --list-resources            List names of processor resources
   -J, --dump-json                 Dump tool description as JSON and exit
+  -D, --dump-module-dir           Output the 'module' directory with resources for this processor
   -h, --help                      This help message
   -V, --version                   Show version
+
+Parameters:
+   "normalization" [object - {}]
+    replacement pairs (regex patterns and regex backrefs) to be applied
+    prior to matching (but not on the result itself)
+   "allow_splits" [boolean - false]
+    allow line strings of the first input fileGrp to be matched by
+    multiple line strings of the second input fileGrp (so concatenate
+    all the latter before inserting into the former)
 ```
 
 For example:
@@ -316,16 +351,65 @@ ocrd-nmalign-merge -I OCR-D-OCR,OCR-D-GT-SEG-BLOCK -O OCR-D-GT-SEG-LINE
 </p>
 </details>
 
+## Implementation
+
+1. set up a matrix of shape _N,M_ (where _N_ is the number of strings
+on the left-hand side, and _M_ is the number of strings on the right-hand side)
+and compute all pairwise similarity scores – using `rapidfuzz.process.cdist`
+with metric `rapidfuzz.metric.Levenshtein.normalized_similarity`,
+which efficiently calculates global alignments (Needleman-Wunsch) in parallel.
+
+2. iteratively assign pairs _i,j_ (effectively adding a mapping from _i_ to _j_)
+by picking the best scoring pair among the rows and columns not already assigned.
+
+### Consistency (monotonicity)
+
+Naïvely, best score means largest similarity. But it is easier for a short pair
+to be similar by chance than for a long pair of strings. And we want to start
+with pairs that most certainly belong to each other. So the similarity must be
+**weighted** with the length of the string in question.
+
+Moreover, since realistically two sets of texts will likely differ slightly in
+their global _reading order_, but (more or less) retain local _line segmentation_,
+we prioritise solutions which maintain **monotonicity**. 
+
+Since this criterion becomes more important as the matrix gets completed and the
+actual string alignments become worse (and thus less reliable), we attenuate
+the preference towards monotonicity by a sigmoid over _M_.
+
+### Splitting (subalignment)
+
+Sometimes even the local _line segmentation_ is not retained between both sets
+of texts. Thus, strings will appear split on one side. To address that, there
+is an option to allow **splitting** the right-hand side:
+
+If (during step 2.) the score is already too low, then search all remaining rows
+for partial matches against column _j_ – again using `cdist`, but now with metric
+`rapidfuzz.fuzz.partial_ratio`, which efficiently calculates local alignments
+(if not exactly Smith-Waterman) in parallel.
+
+Note that for a subsegmentation of that column, we need a **spanning sequence**
+of mutually **non-overlapping** matches across some matching rows. To that end,
+for all matches _i_ above some threshold, now proceed to compute their exact
+subalignments of the string in column _j_ (again in parallel), and store their
+distances into a matrix of shape _L,L_ (where _L_ is the length of that string)
+with the start position as row and the end position as column, respectively.
+Likewise, store row indexes into a sister matrix.
+
+Next, determine the **shortest path** through the distance matrix (spanning
+from _0,0_ to _L,L_ monotonically).
+(In order to accommodate the case where subalignment matches are not already
+spanning perfectly, the distance matrix is filled with default distances
+corresponding to random deletions of characters.)
+
+Backtrack that path among both matrices to determine the overall score, the
+local scores and row indexes _i_, and the local column string positions.
+If the overall score does improve the global score for _j_, then assign
+all rows _i_ to subslices of _j_, respectively. (Otherwise continue with
+the global assignment.)
+
 ## Open Tasks
 
-Usually segmentation not only deviates w.r.t. granularity and reading order of the regions,
-but also of the lines. Often, lines will only allow partial matching, because they have been
-merged / split on one side.
+It may help to offer some interface allowing an interactive UI in the loop.
 
-So for practical relevance, we still need a mechanism for recursive sub-line assignment (among the
-remaining / too low scoring pairs).
-
-This will involve heuristics and may need adding some parameters to control them.
-
-Also, it may help to offer some interface allowing an interactive UI in the loop.
-
+Also, if OCR confidence data is available on the input, this should be utilised.
