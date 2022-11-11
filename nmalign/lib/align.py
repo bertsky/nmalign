@@ -165,7 +165,8 @@ def match_subseg(l1, seg2, scoresfor2, indxesfor2, min_score=0, workers=1, proce
     # prefill with deletion distances (because partial_ratio might skip some chars)
     for i in range(len2):
         for j in range(i + 1, len2):
-            subscoresfor2[i, j] = j - i
+            subscoresfor2[i, j] = j - i # forward gap
+            subscoresfor2[j, i] = j - i # backward gap
     def produce():
         for subind1 in np.nonzero(subdist >= PARTIAL_ACC_MIN)[0]:
             #subscore1 = subdist[subind1, 0]
@@ -178,15 +179,16 @@ def match_subseg(l1, seg2, scoresfor2, indxesfor2, min_score=0, workers=1, proce
         return partial_ratio_alignment(seg1, seg2, processor=processor), ind1
     job = joblib.Parallel(n_jobs=workers)
     for subscore, subind1 in job(joblib.delayed(consume)(item) for item in produce()):
-        subscore1 = (1.0 - subscore.score / 100) * (subscore.dest_end - subscore.dest_start)
-        subscoresfor2[subscore.dest_start, subscore.dest_end] = subscore1
+        subdst1 = (1.0 - subscore.score / 100) * (subscore.dest_end - subscore.dest_start)
+        subscoresfor2[subscore.dest_start, subscore.dest_end] = subdst1
         subindxesfor2[subscore.dest_start, subscore.dest_end] = subind1
     # -- third, find the shortest path through the subsegmentation matrix,
     #           i.e. the best global sequence of non-overlapping local alignments
     subdist, subpath = shortest_path(csgraph=csr_matrix(subscoresfor2),
                                      indices=0, return_predecessors=True)
     # convert to score again and check if better than single match
-    if (len2 - subdist[-1]) / len2 <= min_score:
+    score = (len2 - subdist[-1]) / len2
+    if score <= min_score:
         return []
     # follow up on best path
     subresult = []
@@ -197,5 +199,9 @@ def match_subseg(l1, seg2, scoresfor2, indxesfor2, min_score=0, workers=1, proce
         subind = subindxesfor2[prepos, subpos]
         if subind >= 0:
             subresult.append((subind, prepos, subpos, 1.0 - subscore / (subpos - prepos)))
+        elif subpos < prepos:
+            # backward gap: repair previous assignment
+            subind0, prepos0, subpos0, subscore0 = subresult[-1]
+            subresult[-1] = (subind0, prepos, subpos0, subscore0)
         subpos = prepos
     return subresult
