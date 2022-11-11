@@ -10,6 +10,9 @@
      * [standalone command-line interface nmalign](#standalone-command-line-interface-nmalign)
      * [OCR-D processor interface ocrd-nmalign-merge](#ocr-d-processor-interface-ocrd-nmalign-merge)
   * [Implementation](#implementation)
+     * [Consistency (monotonicity)](#consistency-monotonicity)
+     * [Splitting (subalignment)](#splitting-subalignment)
+     * [Interactive approval](#interactive-approval)
 
 ## Introduction
 
@@ -87,6 +90,7 @@ list of replacements: [exactly 1 required]
   --filelist2 FILENAME           as text file with file paths of strings
 
 Other options:
+  -i, --interactive              prompt for each assigned pair, either proceeding or skipping
   -j, --processes INTEGER RANGE  number of processes to run in parallel
                                  [1<=x<=32]
   -N, --normalization TEXT       JSON object with regex patterns and
@@ -408,8 +412,15 @@ If the overall score does improve the global score for _j_, then assign
 all rows _i_ to subslices of _j_, respectively. (Otherwise continue with
 the global assignment.)
 
+### Interactive approval
+
+If enabled, during 2. (after one alignment pair, or after a list of subalignments
+have been found), prints this pair as a diff and prompts for approval.
+
+If granted, proceeds normally. Else, if this was a subalignment, drops that
+result and proceeds to the global alignment for that segment (prompting again).
+Otherwise, skips that pair and proceeds to the next-best one.
+
 ## Open Tasks
 
-It may help to offer some interface allowing an interactive UI in the loop.
-
-Also, if OCR confidence data is available on the input, this should be utilised.
+If OCR confidence data is available on the input, this should be utilised.

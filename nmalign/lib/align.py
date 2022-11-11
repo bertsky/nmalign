@@ -7,13 +7,14 @@ from rapidfuzz.fuzz import partial_ratio, partial_ratio_alignment
 import numpy as np
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import shortest_path
+import click
 
 SUBSEG_LEN_MIN = 20 # string length above which subsegmentation is attempted
 SUBSEG_ACC_MAX = 0.9 # alignment accuracy below which subsegmentation is attempted
 SUBSEG_ACC_MIN = 0.0 # alignment accuracy above which subsegmentation is attempted
 PARTIAL_ACC_MIN = 60 # minimum subalignment score during subsegmentation
 
-def match(l1, l2, workers=1, normalization=None, cutoff=None, try_subseg=False):
+def match(l1, l2, workers=1, normalization=None, cutoff=None, try_subseg=False, interactive=False):
     """Force alignment of string lists.
 
     Computes string alignments between each pair among l1 and l2.
@@ -22,6 +23,10 @@ def match(l1, l2, workers=1, normalization=None, cutoff=None, try_subseg=False):
     (Unmatched or cut off elements will be assigned -1.
      When subsegmentation is allowed, searches for subalignments
      of suboptimal matches in l2, i.e. may assign multiple l1 segments.)
+
+    When interactive, prompts each subalignment or alignment pair
+    before keeping it. Then continues if accepted, but skipts that pair
+    otherwise.
 
     Returns corresponding list indices and match scores [0.0,1.0]
     as a tuple of Numpy arrays.
@@ -124,7 +129,22 @@ def match(l1, l2, workers=1, normalization=None, cutoff=None, try_subseg=False):
                                   processor=preprocess)
         else:
             subseg = []
+        if len(subseg):
+            accept = not interactive or click.prompt("Found subsegmentation:\n" +
+                                  "".join("%d/%d[%d:%d] (%.2f)\n> %s\n< %s\n" % (
+                                      subind1, ind2, begin, end, subscore, l1[subind1], seg2[begin:end])
+                                          for subind1, begin, end, subscore
+                                          in sorted(subseg, key=lambda sub:sub[1])) +
+                                                     "Accept", prompt_suffix='? ',
+                                                     type=bool, default=True, err=True)
+            if not accept:
+                subseg = []
         if not len(subseg):
+            accept = not interactive or click.prompt("Found %d/%d (%.2f):\n> %s\n< %s\nAccept" % (
+                ind1, ind2, score, seg1, seg2), prompt_suffix='? ', type=bool, default=True, err=True)
+            if not accept:
+                dist[ind1,ind2] = 0 # skip next time
+                continue
             result_idx[ind1] = ind2
             scores[ind1] = score
             keep1[ind1] = False

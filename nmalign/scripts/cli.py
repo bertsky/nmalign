@@ -8,6 +8,7 @@ from ..lib import align
 CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help'])
 
 @cloup.command(context_settings=CONTEXT_SETTINGS)
+@cloup.option('-i', '--interactive', is_flag=True, help='prompt for each assigned pair, either proceeding or skipping')
 @cloup.option('-j', '--processes', default=1, help='number of processes to run in parallel', type=cloup.IntRange(min=1, max=32))
 @cloup.option('-N', '--normalization', default=None, help='JSON object with regex patterns and replacements to be applied before comparison')
 @cloup.option('-x', '--allow-splits', is_flag=True, help='find multiple submatches if replacement scores low')
@@ -36,7 +37,7 @@ CONTEXT_SETTINGS = dict(help_option_names=['-h', '--help'])
     cloup.constraints.If('show_files',
                          then=cloup.constraints.require_one),
     ['files2', 'filelist2'])
-def cli(processes, normalization, allow_splits, show_strings, show_files, separator,
+def cli(interactive, processes, normalization, allow_splits, show_strings, show_files, separator,
         strings1, files1, filelist1,
         strings2, files2, filelist2):
     """Force-align two lists of strings.
@@ -78,7 +79,11 @@ def cli(processes, normalization, allow_splits, show_strings, show_files, separa
     else:
         normalization = None
     # calculate assignments and scores
-    res, dst = align.match(list1, list2, normalization=normalization, workers=processes, try_subseg=allow_splits)
+    res, dst = align.match(list1, list2,
+                           normalization=normalization,
+                           workers=processes,
+                           try_subseg=allow_splits,
+                           interactive=interactive)
     if allow_splits:
         res_ind, res_beg, res_end = res
     else:
