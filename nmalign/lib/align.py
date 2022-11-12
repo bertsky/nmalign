@@ -103,8 +103,6 @@ def match(l1, l2, workers=1, normalization=None, cutoff=None, try_subseg=False, 
         scoresfor2 = distview[:,ind2] # for subseg below
         indxesfor2 = idx1[keep1] # for subseg below
         score = distview[ind1,ind2]
-        if isinstance(cutoff, (int, float)) and score < cutoff:
-            break
         # return to full view and assign next
         ind1 = idx1[keep1][ind1]
         ind2 = idx2[keep2][ind2]
@@ -125,7 +123,8 @@ def match(l1, l2, workers=1, normalization=None, cutoff=None, try_subseg=False, 
             # seg2 a lot larger than seg1
             len(seg2) - len(seg1) > SUBSEG_LEN_MIN / 2):
             subseg = match_subseg(l1, seg2, scoresfor2, indxesfor2,
-                                  min_score=score, workers=workers,
+                                  min_score=max(score, cutoff or 0),
+                                  workers=workers,
                                   processor=preprocess)
         else:
             subseg = []
@@ -144,6 +143,11 @@ def match(l1, l2, workers=1, normalization=None, cutoff=None, try_subseg=False, 
                 ind1, ind2, score, seg1, seg2), prompt_suffix='? ', type=bool, default=True, err=True)
             if not accept:
                 dist[ind1,ind2] = 0 # skip next time
+                continue
+            if cutoff and score < cutoff:
+                if not try_subseg:
+                    break
+                keep2[ind2] = False # don't try again
                 continue
             result_idx[ind1] = ind2
             scores[ind1] = score
