@@ -12,7 +12,7 @@ import click
 SUBSEG_LEN_MIN = 20 # string length above which subsegmentation is attempted
 SUBSEG_ACC_MAX = 0.9 # alignment accuracy below which subsegmentation is attempted
 SUBSEG_ACC_MIN = 0.0 # alignment accuracy above which subsegmentation is attempted
-PARTIAL_ACC_MIN = 60 # minimum subalignment score during subsegmentation
+PARTIAL_ACC_MIN = 50 # minimum subalignment score during subsegmentation
 
 def match(l1, l2, workers=1, normalization=None, cutoff=None, try_subseg=False, interactive=False):
     """Force alignment of string lists.
@@ -142,11 +142,13 @@ def match(l1, l2, workers=1, normalization=None, cutoff=None, try_subseg=False, 
             accept = not interactive or click.prompt("Found %d/%d (%.2f):\n> %s\n< %s\nAccept" % (
                 ind1, ind2, score, seg1, seg2), prompt_suffix='? ', type=bool, default=True, err=True)
             if not accept:
-                dist[ind1,ind2] = 0 # skip next time
+                dist[ind1,ind2] = -np.inf # skip next time
                 continue
             if cutoff and score < cutoff:
                 if not try_subseg:
+                    # without subsegmentation, follow-up results will only be worse
                     break
+                # we did try subsegmentation here already (all l1 for ind2)
                 keep2[ind2] = False # don't try again
                 continue
             result_idx[ind1] = ind2
