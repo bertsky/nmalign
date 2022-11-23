@@ -205,6 +205,7 @@ def match_subseg(l1, seg2, scoresfor2, indxesfor2, min_score=0, workers=1, proce
         return partial_ratio_alignment(seg1, seg2, processor=processor), ind1
     job = joblib.Parallel(n_jobs=workers)
     for subscore, subind1 in job(joblib.delayed(consume)(item) for item in produce()):
+        subscore.dest_end = min(subscore.dest_end, len(seg2))
         subdst1 = (1.0 - subscore.score / 100) * (subscore.dest_end - subscore.dest_start)
         subscoresfor2[subscore.dest_start, subscore.dest_end] = subdst1
         subindxesfor2[subscore.dest_start, subscore.dest_end] = subind1
