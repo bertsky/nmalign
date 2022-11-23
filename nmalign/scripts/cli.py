@@ -95,7 +95,8 @@ def cli(interactive, cutoff, processes, normalization, allow_splits, show_string
     match2 = set()
     for ind1, ind2 in enumerate(res_ind):
         score = dst[ind1]
-        scores.append(score)
+        if ind2 >= 0:
+            scores.append(score)
         if show_strings:
             if ind2 < 0:
                 continue
@@ -119,7 +120,8 @@ def cli(interactive, cutoff, processes, normalization, allow_splits, show_string
             continue
         match1.add(ind1)
         match2.add(ind2)
-    click.echo("average alignment confidence: %d%%" % (100 * sum(scores) / len(scores)), err=True)
+    if len(scores):
+        click.echo("average alignment confidence: %d%%" % (100 * sum(scores) / len(scores)), err=True)
     click.echo("coverage of matching inputs1: %d%%" % (100 * len(match1) / len(list1)), err=True)
     click.echo("coverage of matching inputs2: %d%%" % (100 * len(match2) / len(list2)), err=True)
 
