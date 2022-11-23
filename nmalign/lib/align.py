@@ -226,9 +226,18 @@ def match_subseg(l1, seg2, scoresfor2, indxesfor2, min_score=0, workers=1, proce
         subind = subindxesfor2[prepos, subpos]
         if subind >= 0:
             subresult.append((subind, prepos, subpos, 1.0 - subscore / (subpos - prepos)))
-        elif subpos < prepos:
-            # backward gap: repair previous assignment
-            subind0, prepos0, subpos0, subscore0 = subresult[-1]
-            subresult[-1] = (subind0, prepos, subpos0, subscore0)
         subpos = prepos
+    subresult = list(reversed(subresult))
+    for i in range(len(subresult) - 1):
+        subind1, beg1, end1, subscore1 = subresult[i]
+        subind2, beg2, end2, subscore2 = subresult[i + 1]
+        if end1 <= beg2:
+            continue
+        # backward gap: choose which side to cut from
+        if subscore1 > subscore2:
+            # cut right
+            subresult[i + 1] = subind2, end1, end2, subscore2
+        else:
+            # cut left
+            subresult[i] = subind1, beg1, beg2, subscore1
     return subresult
