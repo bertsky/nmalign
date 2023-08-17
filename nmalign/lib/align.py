@@ -63,9 +63,9 @@ def match(l1, l2, workers=1, normalization=None, cutoff=None, try_subseg=False, 
     dim2 = len(l2)
     idx1 = np.arange(dim1)
     idx2 = np.arange(dim2)
-    keep1 = np.ones(dim1, dtype=np.bool)
-    keep2 = np.ones(dim2, dtype=np.bool)
-    result = -1 * np.ones(dim1, dtype=np.int)
+    keep1 = np.ones(dim1, dtype=bool)
+    keep2 = np.ones(dim2, dtype=bool)
+    result = -1 * np.ones(dim1, dtype=int)
     if try_subseg:
         # result must also hold start and end pos
         result = np.tile(result, (3, 1))
@@ -84,7 +84,7 @@ def match(l1, l2, workers=1, normalization=None, cutoff=None, try_subseg=False, 
         # in addition to isolated match score, we want to prioritise new mappings that
         # keep consistency with current mappings and local ordering on both sides, i.e.
         # monotonicity in the neighbourhood of current mappings
-        monotonicity = np.zeros(dist.shape, dtype=np.bool)
+        monotonicity = np.zeros(dist.shape, dtype=bool)
         prev_ind1, prev_ind2 = 0, 0
         for ind1, ind2 in list(zip(np.flatnonzero(~keep1), result_idx[~keep1])) + [(dim1, dim2)]:
             if (ind1 >= prev_ind1) == (ind2 >= prev_ind2):
@@ -187,7 +187,7 @@ def match_subseg(l1, seg2, scoresfor2, indxesfor2, min_score=0, workers=1, proce
     #            as complete subsegmentations of seg2
     len2 = len(seg2) + 1
     subscoresfor2 = np.inf * np.ones((len2, len2)) # alignment distances from l1 to seg2[start:end]
-    subindxesfor2 = -1 * np.ones((len2, len2), dtype=np.int) # alignment indices from l1 to seg2[start:end]
+    subindxesfor2 = -1 * np.ones((len2, len2), dtype=int) # alignment indices from l1 to seg2[start:end]
     # prefill with deletion distances (because partial_ratio might skip some chars)
     for i in range(len2):
         for j in range(i + 1, len2):
