@@ -10,7 +10,7 @@ LABEL \
 
 WORKDIR /build/nmalign
 COPY setup.py .
-COPY nmalign/ocrd-tool.json .
+COPY ocrd-tool.json .
 COPY nmalign ./nmalign
 COPY requirements.txt .
 COPY README.md .
