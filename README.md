@@ -1,4 +1,5 @@
 [![PyPI version](https://badge.fury.io/py/nmalign.svg)](https://badge.fury.io/py/nmalign)
+[![Docker Image CD](https://github.com/bertsky/nmalign/actions/workflows/docker-image.yml/badge.svg)](https://github.com/bertsky/nmalign/actions/workflows/docker-image.yml)
 
 # nmalign
 
@@ -51,6 +52,10 @@ To install Python dependencies:
 To install this module (along with Python dependencies), do:
 
     pip install .
+
+Alternatively, download the prebuilt image from Dockerhub:
+
+    docker pull ocrd/nmalign
 
 ## Usage
 
