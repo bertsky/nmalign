@@ -2,18 +2,14 @@ import os
 import re
 import json
 from itertools import chain
-from pkg_resources import resource_string
+from typing import Optional, List, Union, get_args
+import multiprocessing as mp
+
 import click
 
 from ocrd.decorators import ocrd_cli_options, ocrd_cli_wrap_processor
-from ocrd import Processor
-from ocrd_utils import (
-    getLogger,
-    make_file_id,
-    assert_file_grp_cardinality,
-    MIMETYPE_PAGE
-)
-from ocrd_modelfactory import page_from_file
+from ocrd import Workspace, Processor, OcrdPageResult
+from ocrd_models import OcrdPage, OcrdFileType
 from ocrd_models.ocrd_page import (
     TextLineType,
     TextEquivType,
@@ -23,26 +19,105 @@ from ocrd_models.ocrd_page import (
     OrderedGroupIndexedType,
     UnorderedGroupType,
     UnorderedGroupIndexedType,
-    to_xml
+    to_xml,
 )
 from ocrd_models.ocrd_page_generateds import (
     ReadingDirectionSimpleType,
     TextLineOrderSimpleType
 )
+from ocrd_modelfactory import page_from_file
+from ocrd_utils import (
+    MIMETYPE_PAGE,
+    config,
+    make_file_id,
+)
 
 from ..lib import align
 
-OCRD_TOOL = json.loads(resource_string(__name__, 'ocrd-tool.json').decode('utf8'))
-TOOL = 'ocrd-nmalign-merge'
 
 class NMAlignMerge(Processor):
 
-    def __init__(self, *args, **kwargs):
-        kwargs['ocrd_tool'] = OCRD_TOOL['tools'][TOOL]
-        kwargs['version'] = OCRD_TOOL['version']
-        super().__init__(*args, **kwargs)
+    @property
+    def executable(self):
+        return 'ocrd-nmalign-merge'
 
-    def process(self):
+    @property
+    def metadata_filename(self) -> str:
+        return os.path.join('ocrd', 'ocrd-tool.json')
+
+    def zip_input_files(self, **kwargs):
+        # overrides ocrd.Processor.zip_input_files, which cannot be used;
+        # we actually want input with MIMETYPE_PAGE for the first grp
+        # and PAGE or (any number of) text/plain files for the second grp
+        if not self.input_file_grp:
+            raise ValueError("Processor is missing input fileGrp")
+
+        input_grp, other_grp = self.input_file_grp.split(",")
+
+        pages = {}
+        for input_file in self.workspace.mets.find_all_files(
+                pageId=self.page_id, fileGrp=input_grp, mimetype=MIMETYPE_PAGE):
+            if not input_file.pageId:
+                # ignore document-global files
+                continue
+            ift = pages.setdefault(input_file.pageId, [None, None])
+            if ift[0]:
+                self._base_logger.debug(f"another PAGE file {input_file.ID} for page {input_file.pageId} "
+                                        f"in input file group {input_grp}")
+                raise NonUniqueInputFile(input_grp, input_file.pageId, None)
+            self._base_logger.debug(f"adding file {input_file.ID} for page {input_file.pageId} "
+                                    f"from input file group {input_grp}")
+            ift[0] = input_file
+        mimetype = "//(%s|text/plain)" % re.escape(MIMETYPE_PAGE)
+        for other_file in self.workspace.mets.find_all_files(
+                pageId=self.page_id, fileGrp=other_grp, mimetype=mimetype):
+            if not other_file.pageId:
+                # ignore document-global files
+                continue
+            ift = pages.get(other_file.pageId, None)
+            if ift is None:
+                self._base_logger.warning(f"no file for page {other_file.pageId} "
+                                          f"in input file group {input_grp}")
+                continue
+            if ift[1]:
+                # fileGrp has multiple files for this page ID
+                if other_file.mimetype == MIMETYPE_PAGE or ift[1].mimetype == MIMETYPE_PAGE:
+                    self._base_logger.debug(f"another PAGE file {other_file.ID} for page {other_file.pageId} "
+                                            f"in input file group {other_grp}")
+                    raise NonUniqueInputFile(other_grp, other_file.pageId, None)
+                # more than 1 plaintext file on other side
+                self._base_logger.debug(f"adding another file {other_file.ID} for page {other_file.pageId} "
+                                        f"from input file group {other_grp}")
+                ift.append(other_file)
+            else:
+                self._base_logger.debug(f"adding file {other_file.ID} for page {other_file.pageId} "
+                                        f"from input file group {other_grp}")
+                ift[1] = other_file
+        # Warn if no files found but pageId was specified, because that might be due to invalid page_id (range)
+        if self.page_id and not any(pages):
+            self._base_logger.critical(f"Could not find any files for selected pageId {self.page_id}.\n"
+                                       f"compare '{self.page_id}' with the output of 'orcd workspace list-page'.")
+        ifts = []
+        for page, ifiles in pages.items():
+            if not ifiles[1]:
+                self._base_logger.error(f'Found no file for page {page} in file group {other_grp}')
+                if config.OCRD_MISSING_INPUT == 'abort':
+                    raise MissingInputFile(other_grp, page, mimetype)
+                continue
+            ifts.append(tuple(ifiles))
+        return ifts
+
+    def process_workspace(self, workspace: Workspace) -> None:
+        self.stats = mp.Manager().dict(all_confs=[], all_match=0, all_total=0)
+        super().process_workspace(workspace)
+        if len(self.stats['all_confs']):
+            self.logger.info("average alignment accuracy overall: %d%%",
+                             100 * sum(self.stats['all_confs']) / len(self.stats['all_confs']))
+        if self.stats['all_total']:
+            self.logger.info("coverage of matching lines overall: %d%%",
+                             100 * self.stats['all_match'] / self.stats['all_total'])
+
+    def process_page_file(self, *input_files : Optional[OcrdFileType]) -> None:
         """Force-align the textlines text of both inputs for each page,
         then insert the 2nd into the 1st.
 
@@ -83,120 +158,127 @@ class NMAlignMerge(Processor):
 
         Produce a new PAGE output file by serialising the resulting hierarchy.
         """
-        LOG = getLogger('processor.NMAlignMerge')
-        assert_file_grp_cardinality(self.input_file_grp, 2)
-        assert_file_grp_cardinality(self.output_file_grp, 1)
-
-        input_file_grp, other_file_grp = self.input_file_grp.split(",")
-        # input file tuples:
-        # we actually want input with MIMETYPE_PAGE for the first grp
-        # and PAGE or (any number of) text/plain files for the second grp
-        ifts = self.zip_input_files(mimetype="//(%s|text/plain)" % re.escape(MIMETYPE_PAGE),
-                                    on_error='abort')
-        all_confs = []
-        all_match = 0
-        all_total = 0
-        for n, ift in enumerate(ifts):
-            input_file, other_file = ift
-            file_id = make_file_id(input_file, self.output_file_grp)
-            page_id = input_file.pageId or input_file.ID
-            LOG.info("INPUT FILE %i / %s (%s vs %s)", n, input_file.pageId, input_file.ID, other_file.ID)
-            pcgts = page_from_file(self.workspace.download_file(input_file))
-            pcgts.set_pcGtsId(file_id)
-            self.add_metadata(pcgts)
-            # or metadata from other_pcgts (GT)?
-            page = pcgts.get_Page()
-            lines = page.get_AllTextLines()
-            if not len(lines):
-                LOG.warning("no text lines on page %s of 1st input", page_id)
-                continue
-            texts = list(map(page_element_unicode0, lines))
-            other_file = self.workspace.download_file(other_file)
-            if other_file.mimetype == MIMETYPE_PAGE:
-                other_pcgts = page_from_file(other_file)
-                other_page = other_pcgts.get_Page()
-                other_lines = other_page.get_AllTextLines()
-                if len(other_lines):
-                    other_texts = list(map(page_element_unicode0, other_lines))
+        input_tuple : List[Optional[Union[OcrdPage,str]]] = [None] * len(input_files)
+        page_id = input_files[0].pageId
+        self._base_logger.info("processing page %s", page_id)
+        for i, input_file in enumerate(input_files):
+            assert isinstance(input_file, get_args(OcrdFileType))
+            self._base_logger.debug(f"parsing file {input_file.ID} for page {page_id}")
+            try:
+                if input_file.mimetype == MIMETYPE_PAGE:
+                    page_ = page_from_file(input_file)
+                    assert isinstance(page_, OcrdPage)
+                    input_tuple[i] = page_
                 else:
-                    # no textline level in 2nd input: try region level with newlines
-                    LOG.warning("no text lines on page %s for 2nd input, trying newline-separeted text regions", page_id)
-                    # keep whole regions to be subsegmented,
-                    # or split lines, or full page?
-                    other_texts = list(chain.from_iterable([
-                        page_element_unicode0(region).split('\r\n')
-                        for region in other_page.get_AllRegions(classes=['Text'])]))
-            else:
-                other_texts = open(other_file.local_filename, 'r').read().splitlines()
-                other_lines = [TextLineType(id="line%04d"%i,
-                                            TextEquiv=[TextEquivType(Unicode=line)])
-                               for i, line in enumerate(other_texts)]
-            if not len(other_texts):
-                LOG.error("no text lines on page %s of 2nd input", page_id)
-                continue
-            # calculate assignments and scores
-            res, dst = align.match(texts, other_texts, workers=1,
-                                   normalization=self.parameter['normalization'],
-                                   try_subseg=self.parameter['allow_splits'])
-            if self.parameter['allow_splits']:
-                res_ind, res_beg, res_end = res
-            else:
-                res_ind = res
-            for other_ind in set(range(len(other_texts))).difference(res_ind):
-                LOG.warning("no match for %s on page %s", other_lines[other_ind].id, page_id)
-            page_confs = []
-            page_match = 0
-            page_total = 0
-            for ind, other_ind in enumerate(res_ind):
-                line = lines[ind]
-                for n, textequiv in enumerate(line.TextEquiv or [], 1):
-                    textequiv.index = n # increment @index of existing TextEquivs
-                if len(other_lines):
-                    other_line = other_lines[other_ind]
-                else:
-                    # no textline level in 2nd input, only region level newline-split:
-                    # create pseudo-line
-                    other_text = other_texts[other_ind]
-                    other_line = TextLineType(id="line%04d" % other_ind,
-                                              TextEquiv=[TextEquivType(Unicode=other_text)])
-                page_total += 1
-                if other_ind < 0:
-                    LOG.warning("unmatched line %s on page %s", line.id, page_id)
-                    continue
-                page_match += 1
-                textequiv = TextEquivType()
-                textequiv.index = 0
-                textequiv.conf = dst[ind]
-                textequiv.Unicode = page_element_unicode0(other_line)
-                if self.parameter['allow_splits'] and res_beg[ind] >= 0 and res_end[ind] >= 0:
-                    other_line.id += "[%d:%d]" % (res_beg[ind], res_end[ind])
-                    textequiv.Unicode = textequiv.Unicode[res_beg[ind]:res_end[ind]]
-                textequiv.dataType = 'other'
-                textequiv.dataTypeDetails = other_file_grp + '/' + other_line.id
-                LOG.debug("matching line %s vs %s [%d%%]", line.id, other_line.id, 100 * dst[ind])
-                line.insert_TextEquiv_at(0, textequiv) # update
-                page_confs.append(dst[ind])
-            if len(page_confs):
-                LOG.info("average alignment accuracy for page %s: %d%%", page_id, 100 * sum(page_confs) / len(page_confs))
-            if page_total:
-                LOG.info("coverage of matching lines for page %s: %d%%", page_id, 100 * page_match / page_total)
-            all_confs.extend(page_confs)
-            all_match += page_match
-            all_total += page_total
+                    input_tuple[i] = input_file.local_filename
+            except ValueError as err:
+                # not PAGE and not an image to generate PAGE for
+                self._base_logger.error(f"non-PAGE input for page {page_id}: {err}")
+        output_file_id = make_file_id(input_files[0], self.output_file_grp)
+        output_file = next(self.workspace.mets.find_files(ID=output_file_id), None)
+        if output_file and config.OCRD_EXISTING_OUTPUT != 'OVERWRITE':
+            # short-cut avoiding useless computation:
+            raise FileExistsError(
+                f"A file with ID=={output_file_id} already exists {output_file} and neither force nor ignore are set"
+            )
+        input_file_grp, other_file_grp = self.input_file_grp.split(',')
 
-            page_update_higher_textequiv_levels('line', pcgts)
-            self.workspace.add_file(
-                ID=file_id,
-                file_grp=self.output_file_grp,
-                pageId=input_file.pageId,
-                mimetype=MIMETYPE_PAGE,
-                local_filename=os.path.join(self.output_file_grp,
-                                            file_id + '.xml'),
-                content=to_xml(pcgts))
-        if len(all_confs):
-            LOG.info("average alignment accuracy overall: %d%%", 100 * sum(all_confs) / len(all_confs))
-        if all_total:
-            LOG.info("coverage of matching lines overall: %d%%", 100 * all_match / all_total)
+        pcgts = input_tuple[0]
+        page = pcgts.get_Page()
+        lines = page.get_AllTextLines()
+        if not len(lines):
+            self.logger.warning("no text lines on page %s of 1st input", page_id)
+            return
+        texts = list(map(page_element_unicode0, lines))
+        if isinstance(input_tuple[1], OcrdPage):
+            other_pcgts = input_tuple[1]
+            other_page = other_pcgts.get_Page()
+            other_lines = other_page.get_AllTextLines()
+            if len(other_lines):
+                other_texts = list(map(page_element_unicode0, other_lines))
+            else:
+                # no textline level in 2nd input: try region level with newlines
+                self.logger.warning("no text lines on page %s for 2nd input, trying newline-separeted text regions", page_id)
+                # keep whole regions to be subsegmented,
+                # or split lines, or full page?
+                other_texts = list(chain.from_iterable([
+                    page_element_unicode0(region).split('\r\n')
+                    for region in other_page.get_AllRegions(classes=['Text'])]))
+        else:
+            other_texts = []
+            for other_filename in sorted(input_tuple[1:]):
+                with open(other_filename, 'r') as other_file:
+                    other_texts.extend(other_file.read().splitlines())
+            other_lines = [TextLineType(id="line%04d"%i,
+                                        TextEquiv=[TextEquivType(Unicode=line)])
+                           for i, line in enumerate(other_texts)]
+        if not len(other_texts):
+            self.logger.error("no text lines on page %s of 2nd input", page_id)
+            return
+        # calculate assignments and scores
+        res, dst = align.match(texts, other_texts, workers=1,
+                               normalization=self.parameter['normalization'],
+                               try_subseg=self.parameter['allow_splits'])
+        if self.parameter['allow_splits']:
+            res_ind, res_beg, res_end = res
+        else:
+            res_ind = res
+        for other_ind in set(range(len(other_texts))).difference(res_ind):
+            self.logger.warning("no match for %s on page %s", other_lines[other_ind].id, page_id)
+        page_confs = []
+        page_match = 0
+        page_total = 0
+        for ind, other_ind in enumerate(res_ind):
+            line = lines[ind]
+            for n, textequiv in enumerate(line.TextEquiv or [], 1):
+                textequiv.index = n # increment @index of existing TextEquivs
+            if len(other_lines):
+                other_line = other_lines[other_ind]
+            else:
+                # no textline level in 2nd input, only region level newline-split:
+                # create pseudo-line
+                other_text = other_texts[other_ind]
+                other_line = TextLineType(id="line%04d" % other_ind,
+                                          TextEquiv=[TextEquivType(Unicode=other_text)])
+            page_total += 1
+            if other_ind < 0:
+                self.logger.warning("unmatched line %s on page %s", line.id, page_id)
+                continue
+            page_match += 1
+            textequiv = TextEquivType()
+            textequiv.index = 0
+            textequiv.conf = dst[ind]
+            textequiv.Unicode = page_element_unicode0(other_line)
+            if self.parameter['allow_splits'] and res_beg[ind] >= 0 and res_end[ind] >= 0:
+                other_line.id += "[%d:%d]" % (res_beg[ind], res_end[ind])
+                textequiv.Unicode = textequiv.Unicode[res_beg[ind]:res_end[ind]]
+            textequiv.dataType = 'other'
+            textequiv.dataTypeDetails = other_file_grp + '/' + other_line.id
+            self.logger.debug("matching line %s vs %s [%d%%]", line.id, other_line.id, 100 * dst[ind])
+            line.insert_TextEquiv_at(0, textequiv) # update
+            page_confs.append(dst[ind])
+        if len(page_confs):
+            self.logger.info("average alignment accuracy for page %s: %d%%", page_id, 100 * sum(page_confs) / len(page_confs))
+        if page_total:
+            self.logger.info("coverage of matching lines for page %s: %d%%", page_id, 100 * page_match / page_total)
+
+        self.stats['all_confs'].extend(page_confs)
+        self.stats['all_match'] += page_match
+        self.stats['all_total'] += page_total
+
+        page_update_higher_textequiv_levels('line', pcgts)
+        page_remove_lower_textequiv_levels('line', pcgts)
+        # or metadata from other_pcgts (GT)?
+        pcgts.set_pcGtsId(output_file_id)
+        self.add_metadata(pcgts)
+        self.workspace.add_file(
+            file_id=output_file_id,
+            file_grp=self.output_file_grp,
+            page_id=page_id,
+            local_filename=os.path.join(self.output_file_grp, output_file_id + '.xml'),
+            mimetype=MIMETYPE_PAGE,
+            content=to_xml(pcgts),
+        )
 
 # from ocrd_tesserocr
 def page_element_unicode0(element):
@@ -208,9 +290,8 @@ def page_element_unicode0(element):
 
 def page_element_conf0(element):
     """Get confidence (as float value) of the first text result."""
-    if element.get_TextEquiv():
-        # generateDS does not convert simpleType for attributes (yet?)
-        return float(element.get_TextEquiv()[0].conf or "1.0")
+    if element.TextEquiv:
+        return 1.0 if element.TextEquiv[0].conf is None else element.TextEquiv[0].conf
     return 1.0
 
 def page_get_reading_order(ro, rogroup):
@@ -347,6 +428,23 @@ def page_update_higher_textequiv_levels(level, pcgts, overwrite=True):
             if not region.get_TextEquiv() or overwrite:
                 region.set_TextEquiv( # replace old, if any
                     [TextEquivType(Unicode=region_unicode, conf=region_conf)])
+
+def page_remove_lower_textequiv_levels(level, pcgts):
+    page = pcgts.Page
+    if level == 'region':
+        for region in page.get_AllRegions(classes=['Text']):
+            region.TextEquiv = []
+    else:
+        for line in page.get_AllTextLines():
+            if level == 'line':
+                line.Word = []
+            else:
+                for word in line.Word or []:
+                    if level == 'word':
+                        word.Glyph = []
+                    else:
+                        for glyph in word.Glyph:
+                            glyph.Graphemes = []
 
 @click.command()
 @ocrd_cli_options
