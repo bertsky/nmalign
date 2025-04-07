@@ -5,7 +5,7 @@ GIT_SUBMODULE = git submodule
 
 DOCKER_BASE_IMAGE = docker.io/ocrd/core:v3.3.0
 DOCKER_TAG = ocrd/nmalign
-PYTEST_ARGS ?= --junit-xml=test.xml -vv
+PYTEST_ARGS ?= -vv
 
 help:
 	@echo
@@ -20,9 +20,10 @@ help:
 	@echo ""
 	@echo "  Variables"
 	@echo ""
-	@echo "    PYTHON"
-	@echo "    PYTEST_ARGS   Additional arguments for Pytest"
-	@echo "    DOCKER_TAG    Docker image tag of result for the docker target"
+	@echo "    PYTHON        [$(PYTHON)]"
+	@echo "    PIP           [$(PIP)]"
+	@echo "    PYTEST_ARGS   (additional arguments for Pytest [$(PYTEST_ARGS)]"
+	@echo "    DOCKER_TAG    (tag of Docker image to build [$(DOCKER_TAG)])"
 
 # Install Python deps via pip
 deps:
@@ -39,8 +40,16 @@ build:
 	$(PIP) install build wheel
 	$(PYTHON) -m build .
 
+deps-test:
+	$(PIP) install -r requirements-test.txt
+
 test: tests/assets
 	$(PYTHON) -m pytest  tests --durations=0 $(PYTEST_ARGS)
+
+coverage:
+	coverage erase
+	$(MAKE) test PYTHON="coverage run"
+	coverage report -m
 
 # Update OCR-D/assets submodule
 .PHONY: always-update tests/assets
@@ -63,4 +72,4 @@ docker:
 	--build-arg BUILD_DATE=$$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
 	-t $(DOCKER_TAG) .
 
-.PHONY: help deps install install-dev build docker
+.PHONY: help coverage deps deps-test install install-dev build docker
