@@ -163,13 +163,14 @@ class NMAlignMerge(Processor):
         self._base_logger.info("processing page %s", page_id)
         for i, input_file in enumerate(input_files):
             assert isinstance(input_file, get_args(OcrdFileType))
-            self._base_logger.debug(f"parsing file {input_file.ID} for page {page_id}")
             try:
                 if input_file.mimetype == MIMETYPE_PAGE:
+                    self._base_logger.debug(f"parsing file {input_file.ID} for page {page_id}")
                     page_ = page_from_file(input_file)
                     assert isinstance(page_, OcrdPage)
                     input_tuple[i] = page_
                 else:
+                    self._base_logger.debug(f"reading file {input_file.ID} for page {page_id}")
                     input_tuple[i] = input_file.local_filename
             except ValueError as err:
                 # not PAGE and not an image to generate PAGE for
@@ -215,6 +216,14 @@ class NMAlignMerge(Processor):
         if not len(other_texts):
             self.logger.error("no text lines on page %s of 2nd input", page_id)
             return
+        skip = []
+        for i, other_text in enumerate(other_texts):
+            if not other_text.strip():
+                self.logger.warning("skipping empty line %s on page %s", other_lines[i].id, page_id)
+                skip.append(i)
+        for i in sorted(skip, reverse=True):
+            del other_lines[i]
+            del other_texts[i]
         # calculate assignments and scores
         res, dst = align.match(texts, other_texts, workers=1,
                                normalization=self.parameter['normalization'],
