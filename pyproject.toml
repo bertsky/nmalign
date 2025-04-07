@@ -36,5 +36,6 @@ Repository = "https://github.com/bertsky/nmalign.git"
 [tool.setuptools.dynamic]
 dependencies = {file = ["requirements.txt"]}
 
-[tool.setuptools.package-data]
-"*" = ['*.json', '*.yml', '*.yaml', '*.csv.gz', '*.jar', '*.zip']
+[tool.setuptools]
+packages = ["nmalign", "nmalign.lib", "nmalign.ocrd", "nmalign.scripts"]
+package-data = {"*" = ["ocrd-tool.json"]}
