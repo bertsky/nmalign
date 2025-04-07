@@ -1,4 +1,5 @@
 [![PyPI version](https://badge.fury.io/py/nmalign.svg)](https://badge.fury.io/py/nmalign)
+[![Pytest CI](https://github.com/bertsky/nmalign/actions/workflows/test-python.yml/badge.svg)](https://github.com/bertsky/nmalign/actions/workflows/test-python.yml)
 [![Docker Image CD](https://github.com/bertsky/nmalign/actions/workflows/docker-image.yml/badge.svg)](https://github.com/bertsky/nmalign/actions/workflows/docker-image.yml)
 
 # nmalign
