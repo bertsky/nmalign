@@ -1,11 +1,13 @@
 {
   "git_url": "https://github.com/bertsky/nmalign",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "tools": {
     "ocrd-nmalign-merge": {
       "executable": "ocrd-nmalign-merge",
       "categories": ["Text recognition and optimization"],
       "steps": ["recognition/post-correction"],
+      "input_file_grp_cardinality": 2,
+      "output_file_grp_cardinality": 1,
       "description": "forced alignment of lists of string by fuzzy string matching",
       "parameters": {
         "normalization": {
