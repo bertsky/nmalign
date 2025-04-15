@@ -1,5 +1,6 @@
 {
   "git_url": "https://github.com/bertsky/nmalign",
+  "dockerhub": "ocrd/nmalign",
   "version": "0.0.5",
   "tools": {
     "ocrd-nmalign-merge": {
