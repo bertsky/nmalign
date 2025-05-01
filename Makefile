@@ -3,8 +3,9 @@ PIP = pip3
 PYTHONIOENCODING=utf8
 GIT_SUBMODULE = git submodule
 
-DOCKER_BASE_IMAGE = docker.io/ocrd/core:v3.3.0
-DOCKER_TAG = ocrd/nmalign
+DOCKER_BASE_IMAGE ?= docker.io/ocrd/core:latest
+DOCKER_TAG ?= ocrd/nmalign
+DOCKER ?= docker
 PYTEST_ARGS ?= -vv
 
 help:
@@ -66,7 +67,7 @@ tests/assets: testdata
 	cp -a $</data/* $@
 
 docker:
-	docker build \
+	$(DOCKER) build \
 	--build-arg DOCKER_BASE_IMAGE=$(DOCKER_BASE_IMAGE) \
 	--build-arg VCS_REF=$$(git rev-parse --short HEAD) \
 	--build-arg BUILD_DATE=$$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
